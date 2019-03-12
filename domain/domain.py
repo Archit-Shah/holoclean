@@ -8,7 +8,7 @@ from pyitlib import discrete_random_variable as drv
 from tqdm import tqdm
 
 from dataset import AuxTables, CellStatus
-from .estimators import NaiveBayes
+from .estimators import *
 from utils import NULL_REPR
 
 
@@ -222,7 +222,7 @@ class DomainEngine:
             domain: ||| separated string of domain values
             domain_size: length of domain
             init_value: initial value for this cell
-            init_value_idx: domain index of init_value
+            init_index: domain index of init_value
             fixed: 1 if a random sample was taken since no correlated attributes/top K values
         """
 
@@ -231,6 +231,7 @@ class DomainEngine:
                 "Call <setup_attributes> to setup active attributes. Error detection should be performed before setup.")
 
         logging.debug('generating initial set of un-pruned domain values...')
+
         tic = time.clock()
         # Iterate over dataset rows.
         cells = []
@@ -293,6 +294,7 @@ class DomainEngine:
                               "fixed": cell_status})
                 vid += 1
         domain_df = pd.DataFrame(data=cells).sort_values('_vid_')
+        logging.debug('domain size stats: %s', domain_df['domain_size'].describe())
         logging.debug('DONE generating initial set of domain values in %.2f', time.clock() - tic)
 
         # Skip estimator model since we do not require any weak labelling or domain

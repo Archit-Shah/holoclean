@@ -28,7 +28,7 @@ class NaiveBayes(Estimator):
         for row in self.ds.get_raw_data().to_records():
             self._raw_records_by_tid[row['_tid_']] = row
 
-    def train(self):
+    def train(self, num_epochs=None):
         pass
 
     def predict_pp(self, row, attr, values):
