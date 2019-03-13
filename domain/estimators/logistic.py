@@ -31,13 +31,13 @@ class Logistic(Estimator, torch.nn.Module):
         :param active_attrs: (list[str]) attributes that have random values
         """
         torch.nn.Module.__init__(self)
-        Estimator.__init__(self, env, dataset)
+        Estimator.__init__(self, env, dataset, domain_df)
 
         self.active_attrs = active_attrs
 
         # Sorted records of the currently populated domain. This helps us
         # align the final predicted probabilities.
-        self.domain_records = domain_df.sort_values('_vid_')[['_vid_', '_tid_', 'attribute', 'domain', 'init_value']].to_records()
+        self.domain_records = self.domain_df[['_vid_', '_tid_', 'attribute', 'domain', 'init_value']].to_records()
 
         # self.dom maps tid --> attr --> list of domain values
         # we need to find the number of domain values we will be generating
@@ -183,7 +183,7 @@ class Logistic(Estimator, torch.nn.Module):
         pred_X = self._X[start_idx:end_idx]
         pred_Y = self.forward(pred_X)
         values = self.domain_records[row['_vid_']]['domain'].split('|||')
-        return zip(values, map(float, pred_Y))
+        return row['_vid_'], zip(values, map(float, pred_Y))
 
     def predict_pp_batch(self):
         """
@@ -193,7 +193,7 @@ class Logistic(Estimator, torch.nn.Module):
         for rec in self.domain_records:
             values = rec['domain'].split('|||')
             start_idx, end_idx = self.vid_to_idxs[rec['_vid_']]
-            yield zip(values, map(float, pred_Y[start_idx:end_idx]))
+            yield rec['_vid_'], zip(values, map(float, pred_Y[start_idx:end_idx]))
 
 class Featurizer:
     """

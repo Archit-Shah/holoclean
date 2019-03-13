@@ -26,8 +26,9 @@ class NullDetector(Detector):
             _tid_: entity ID
             attribute: attribute with NULL value for this entity
         """
-        attributes = self.ds.get_attributes()
+        # attributes = self.ds.get_attributes()
         errors = []
+        attributes = self.ds.train_attrs
         for attr in attributes:
             tmp_df = self.df[self.df[attr] == NULL_REPR]['_tid_'].to_frame()
             tmp_df.insert(1, "attribute", attr)

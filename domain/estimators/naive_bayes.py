@@ -15,10 +15,9 @@ class NaiveBayes(Estimator):
     probability is normalized over all values passed into predict_pp.
     """
     def __init__(self, env, dataset, domain_df, correlations):
-        Estimator.__init__(self, env, dataset)
+        Estimator.__init__(self, env, dataset, domain_df)
 
         self._n_tuples, self._freq, self._cooccur_freq = self.ds.get_statistics()
-        self.domain_df = domain_df
         self._correlations = correlations
         self._cor_strength = self.env['nb_cor_strength']
         self._corr_attrs = {}
@@ -58,8 +57,11 @@ class NaiveBayes(Estimator):
 
         denom = sum(map(math.exp, [log_prob for _, log_prob in nb_score]))
 
-        for val, log_prob in nb_score:
-            yield (val, math.exp(log_prob) / denom)
+        def val_probas():
+            for val, log_prob in nb_score:
+                yield val, math.exp(log_prob) / denom
+
+        return row['_vid_'], val_probas()
 
     def predict_pp_batch(self):
         """

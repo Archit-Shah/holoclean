@@ -1,5 +1,7 @@
 import logging
 import pandas as pd
+import os
+import sys
 import time
 
 import itertools
@@ -57,9 +59,12 @@ class DomainEngine:
         that contains pairwise correlations between attributes (values are treated as
         discrete categories).
         """
-        self.correlations = self._compute_norm_cond_entropy_corr()
+        self.correlations = self.compute_norm_cond_entropy_corr(self.ds.get_raw_data(),
+                                                                self.ds.get_attributes(),
+                                                                self.ds.get_attributes())
 
-    def _compute_norm_cond_entropy_corr(self):
+    @staticmethod
+    def compute_norm_cond_entropy_corr(data_df, attrs_from, attrs_to):
         """
         Computes the correlations between attributes by calculating
         the normalized conditional entropy between them. The conditional
@@ -74,32 +79,33 @@ class DomainEngine:
 
         :return a dictionary of correlations
         """
-        data_df = self.ds.get_raw_data()
-        attrs = self.ds.get_attributes()
-
         corr = {}
         # Compute pair-wise conditional entropy.
-        for x in attrs:
+        for x in attrs_from:
             corr[x] = {}
-            x_vals = data_df[x]
-            x_domain_size = x_vals.nunique()
-            for y in attrs:
-                # Set correlation to 0.0 if entropy of x is 1 (only one possible value).
-                if x_domain_size == 1:
-                    corr[x][y] = 0.0
-                    continue
-
+            for y in attrs_to:
                 # Set correlation to 1 for same attributes.
                 if x == y:
                     corr[x][y] = 1.0
+                    continue
+
+                xy_df = data_df[[x, y]]
+                xy_df = xy_df.loc[~(xy_df[x] == NULL_REPR) & ~(xy_df[y] == NULL_REPR)]
+                x_vals = xy_df[x]
+                x_domain_size = x_vals.nunique()
+
+                # Set correlation to 0.0 if entropy of x is 1 (only one possible value).
+                if x_domain_size == 1 or len(xy_df) == 0:
+                    corr[x][y] = 0.0
                     continue
 
                 # Compute the conditional entropy H(x|y) = H(x,y) - H(y).
                 # H(x,y) denotes H(x U y).
                 # If H(x|y) = 0, then y determines x, i.e., y -> x.
                 # Use the domain size of x as a log base for normalization.
-                y_vals = data_df[y]
-                x_y_entropy = drv.entropy_conditional(x_vals, y_vals, base=x_domain_size)
+                y_vals = xy_df[y]
+
+                x_y_entropy = drv.entropy_conditional(x_vals, y_vals, base=x_domain_size).item()
 
                 # The conditional entropy is 0 for strongly correlated attributes and 1 for
                 # completely independent attributes. We reverse this to reflect the correlation.
@@ -238,74 +244,122 @@ class DomainEngine:
         vid = 0
         records = self.ds.get_raw_data().to_records()
         self.all_attrs = list(records.dtype.names)
+
+        # for row in tqdm(list(records)):
+        #     tid = row['_tid_']
+        #     for attr in self.active_attributes:
+        #         init_value, init_value_idx, dom = self.get_domain_cell(attr, row)
+
+        #         # We will use an estimator model for additional weak labelling
+        #         # below, which requires an initial pruned domain first.
+        #         # Weak labels will be trained on the init values.
+        #         cid = self.ds.get_cell_id(tid, attr)
+
+        #         # Originally, all cells have a NOT_SET status to be considered
+        #         # in weak labelling.
+        #         cell_status = CellStatus.NOT_SET.value
+
+        #         if len(dom) <= 1:
+        #             # Initial  value is NULL and we cannot come up with
+        #             # a domain; a random domain probably won't help us so
+        #             # completely ignore this cell and continue.
+        #             if init_value == NULL_REPR:
+        #                 continue
+
+        #             # Not enough domain values, we need to get some random
+        #             # values (other than 'init_value') for training. However,
+        #             # this might still get us zero domain values.
+        #             rand_dom_values = self.get_random_domain(attr, init_value)
+
+        #             # rand_dom_values might still be empty. In this case,
+        #             # there are no other possible values for this cell. There
+        #             # is not point to use this cell for training and there is no
+        #             # point to run inference on it since we cannot even generate
+        #             # a random domain. Therefore, we just ignore it from the
+        #             # final tensor.
+        #             if len(rand_dom_values) == 0:
+        #                 continue
+
+        #             # Otherwise, just add the random domain values to the domain
+        #             # and set the cell status accordingly.
+        #             dom.extend(rand_dom_values)
+
+        #             # Set the cell status that this is a single value and was
+        #             # randomly assigned other values in the domain. These will
+        #             # not be modified by the estimator.
+        #             cell_status = CellStatus.SINGLE_VALUE.value
+
+        #         cells.append({"_tid_": tid,
+        #                       "attribute": attr,
+        #                       "_cid_": cid,
+        #                       "_vid_": vid,
+        #                       "domain": "|||".join(dom),
+        #                       "domain_size": len(dom),
+        #                       "init_value": init_value,
+        #                       "init_index": init_value_idx,
+        #                       "weak_label": init_value,
+        #                       "weak_label_idx": init_value_idx,
+        #                       "fixed": cell_status})
+        #         vid += 1
+        # domain_df = pd.DataFrame(data=cells).sort_values('_vid_')
+        # logging.debug('domain size stats: %s', domain_df['domain_size'].describe())
+        # logging.debug('DONE generating initial set of domain values in %.2f', time.clock() - tic)
+
+        # # Skip estimator model since we do not require any weak labelling or domain
+        # # pruning based on posterior probabilities.
+        # if self.env['weak_label_thresh'] == 1 and self.env['domain_thresh_2'] == 0:
+        #     return domain_df
+
+        # # Run pruned domain values from correlated attributes above through
+        # # posterior model for a naive probability estimation.
+        # logging.debug('training posterior model for estimating domain value probabilities...')
+        # tic = time.clock()
+
+        TRAIN_ATTRS = self.ds.train_attrs
+
         for row in tqdm(list(records)):
             tid = row['_tid_']
-            for attr in self.active_attributes:
-                init_value, init_value_idx, dom = self.get_domain_cell(attr, row)
-                # We will use an estimator model for additional weak labelling
-                # below, which requires an initial pruned domain first.
-                # Weak labels will be trained on the init values.
-                cid = self.ds.get_cell_id(tid, attr)
+            for attr in TRAIN_ATTRS:
+                init_value = row[attr]
 
-                # Originally, all cells have a NOT_SET status to be considered
-                # in weak labelling.
-                cell_status = CellStatus.NOT_SET.value
+                cells.append({'_tid_': tid,
+                    'attribute': attr,
+                    '_cid_': self.ds.get_cell_id(tid, attr),
+                    '_vid_': vid,
+                    'init_value': init_value,
+                })
 
-                if len(dom) <= 1:
-                    # Initial  value is NULL and we cannot come up with
-                    # a domain; a random domain probably won't help us so
-                    # completely ignore this cell and continue.
-                    if init_value == NULL_REPR:
-                        continue
-
-                    # Not enough domain values, we need to get some random
-                    # values (other than 'init_value') for training. However,
-                    # this might still get us zero domain values.
-                    rand_dom_values = self.get_random_domain(attr, init_value)
-
-                    # rand_dom_values might still be empty. In this case,
-                    # there are no other possible values for this cell. There
-                    # is not point to use this cell for training and there is no
-                    # point to run inference on it since we cannot even generate
-                    # a random domain. Therefore, we just ignore it from the
-                    # final tensor.
-                    if len(rand_dom_values) == 0:
-                        continue
-
-                    # Otherwise, just add the random domain values to the domain
-                    # and set the cell status accordingly.
-                    dom.extend(rand_dom_values)
-
-                    # Set the cell status that this is a single value and was
-                    # randomly assigned other values in the domain. These will
-                    # not be modified by the estimator.
-                    cell_status = CellStatus.SINGLE_VALUE.value
-
-                cells.append({"_tid_": tid,
-                              "attribute": attr,
-                              "_cid_": cid,
-                              "_vid_": vid,
-                              "domain": "|||".join(dom),
-                              "domain_size": len(dom),
-                              "init_value": init_value,
-                              "init_index": init_value_idx,
-                              "weak_label": init_value,
-                              "weak_label_idx": init_value_idx,
-                              "fixed": cell_status})
                 vid += 1
         domain_df = pd.DataFrame(data=cells).sort_values('_vid_')
-        logging.debug('domain size stats: %s', domain_df['domain_size'].describe())
-        logging.debug('DONE generating initial set of domain values in %.2f', time.clock() - tic)
 
-        # Skip estimator model since we do not require any weak labelling or domain
-        # pruning based on posterior probabilities.
-        if self.env['weak_label_thresh'] == 1 and self.env['domain_thresh_2'] == 0:
-            return domain_df
+        KNN = 20
 
-        # Run pruned domain values from correlated attributes above through
-        # posterior model for a naive probability estimation.
-        logging.debug('training posterior model for estimating domain value probabilities...')
-        tic = time.clock()
+        er = TupleEmbedding(self.env, self.ds, domain_df,
+                train_attrs=TRAIN_ATTRS,
+                max_train_domain=KNN,
+                # validate_fpath=self.ds.clean_fpath,
+                # validate_tid_col='tid',
+                # validate_attr_col='attribute',
+                # validate_val_col='correct_val'
+                            )
+        EPOCHS = 5
+        LAMBDA = 0.1
+        # PREFIX = 'experiments/%s/%s_tuple_embed_%d_epochs_%d_knn_%.2f_attrW_%s' % (self.ds.raw_data.name,
+        #    self.ds.raw_data.name, EPOCHS, KNN, ATTRW, "ALL")# ','.join(TRAIN_ATTRS))
+        # assert os.path.exists(os.path.dirname(PREFIX))
+        er.train(EPOCHS, 32, LAMBDA,)
+                 # validate_epoch=1 ,
+                 #validate_results_prefix=PREFIX,
+                # validate_prob=0.8,
+                # validate_epoch=1)
+
+        sys.exit(1)
+
+
+
+
+
+
         estimator = NaiveBayes(self.env, self.ds, domain_df, self.correlations)
         logging.debug('DONE training posterior model in %.2fs', time.clock() - tic)
 
