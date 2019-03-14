@@ -107,13 +107,13 @@ class Dataset:
             logging.info("Loaded %d rows with %d cells", self.raw_data.df.shape[0], self.raw_data.df.shape[0] * self.raw_data.df.shape[1])
 
             # Call to store to database
-            self.raw_data.store_to_db(self.engine.engine)
+            # self.raw_data.store_to_db(self.engine.engine)
             status = 'DONE Loading {fname}'.format(fname=os.path.basename(fpath))
 
             # Generate indexes on attribute columns for faster queries
-            for attr in self.raw_data.get_attributes():
-                # Generate index on attribute
-                self.raw_data.create_db_index(self.engine,[attr])
+            # for attr in self.raw_data.get_attributes():
+            #     # Generate index on attribute
+            #     self.raw_data.create_db_index(self.engine,[attr])
 
             # Create attr_to_idx dictionary (assign unique index for each attribute)
             # and attr_count (total # of attributes)

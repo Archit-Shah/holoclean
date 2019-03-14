@@ -1,6 +1,7 @@
 import logging
 import math
 import pickle
+import csv
 
 from gensim.models import FastText
 import numpy as np
@@ -48,7 +49,7 @@ class LookupDataset(Dataset):
             else:
                 self._isset[idx] = 1
 
-    def __init__(self, env, dataset, domain_df, embed_model, neg_sample, max_train_domain):
+    def __init__(self, env, dataset, domain_df, embed_model, neg_sample, max_train_domain, memoize):
         """
         :param dataset: (Dataset) original dataset
         :param domain_df: (DataFrame) dataframe containing VIDs and their
@@ -61,6 +62,8 @@ class LookupDataset(Dataset):
         self._embed_model = embed_model
         self._max_domain = max_train_domain
         self.inference_mode = False
+        self.memoize = memoize
+
 
 
 
@@ -144,28 +147,29 @@ class LookupDataset(Dataset):
         # self._max_domain = int(domain_df['domain_size'].max())
 
         # memoized stuff
-        self._domain_idxs = self.MemoizeVec(len(self), self._max_domain)
-        self._init_idxs = self.MemoizeVec(len(self), self.n_init_attrs - 1)
-        self._neg_idxs = self.MemoizeVec(len(self), None)
+        if memoize:
+            self._domain_idxs = self.MemoizeVec(len(self), self._max_domain)
+            self._init_idxs = self.MemoizeVec(len(self), self.n_init_attrs - 1)
+            self._neg_idxs = self.MemoizeVec(len(self), None)
 
     def __len__(self):
         return len(self._train_records)
 
-    def _get_neg_idxs(self, idx, memoize=True):
-        if not memoize or idx not in self._neg_idxs:
+    def _get_neg_idxs(self, idx):
+        if not self.memoize or idx not in self._neg_idxs:
             cur = self._train_records[idx]
 
             # Value indices that are not in the domain
             neg_idxs = torch.LongTensor(np.setdiff1d(self._train_val_idxs_by_attr[cur['attribute']],
-                    self._get_domain_idxs(idx, memoize=memoize),
+                    self._get_domain_idxs(idx),
                     assume_unique=True))
-            if not memoize:
+            if not self.memoize:
                 return neg_idxs
             self._neg_idxs[idx] = neg_idxs
         return self._neg_idxs[idx]
 
-    def _get_domain_idxs(self, idx, memoize=True):
-        if not memoize or idx not in self._domain_idxs:
+    def _get_domain_idxs(self, idx):
+        if not self.memoize or idx not in self._domain_idxs:
             cur = self._train_records[idx]
 
             # Domain values and their indexes (softmax indexes)
@@ -176,14 +180,14 @@ class LookupDataset(Dataset):
             if cur['init_value'] != '_nan_':
                 domain_idxs[0] = self._train_val_idxs[cur['attribute']][cur['init_value']]
 
-            if not memoize:
+            if not self.memoize:
                 return domain_idxs
             self._domain_idxs[idx,0:len(domain_idxs)] = domain_idxs
 
         return self._domain_idxs[idx]
 
-    def _get_init_idxs(self, idx, memoize=True):
-        if not memoize or idx not in self._init_idxs:
+    def _get_init_idxs(self, idx):
+        if not self.memoize or idx not in self._init_idxs:
             cur = self._train_records[idx]
 
             # Init values and their indexes (features)
@@ -195,7 +199,7 @@ class LookupDataset(Dataset):
             else:
                 init_idxs = torch.LongTensor([self._init_val_idxs[attr][self._raw_data_dict[cur['_tid_']][attr]]
                         for attr in self._init_attrs if attr != cur['attribute']])
-            if not memoize:
+            if not self.memoize:
                 return init_idxs
             self._init_idxs[idx] = init_idxs
 
@@ -212,7 +216,7 @@ class LookupDataset(Dataset):
         """
         Returns (feature vectors, domain_vectors, target class (init index))
 
-        :param:`vid` is the desired VID.
+        :param:`vid` is the desired VID or VIDs.
         """
         idx = self._vid_to_idx[vid]
         cur = self._train_records[idx]
@@ -300,7 +304,7 @@ class LookupDataset(Dataset):
 
 class VidSampler(Sampler):
     def __init__(self, domain_df, shuffle=True):
-        self._vids = domain_df['_vid_'].values
+        self._vids = domain_df.loc[domain_df['is_clean'], '_vid_'].values
 
         if shuffle:
             self._vids = np.random.permutation(self._vids)
@@ -317,6 +321,7 @@ class TupleEmbedding(Estimator, torch.nn.Module):
     def __init__(self, env, dataset, domain_df,
             train_attrs=None,
             max_train_domain=20,
+            memoize=True,
             embed_size=10, neg_sample=True,
             validate_fpath=None,
             validate_tid_col=None, validate_attr_col=None, validate_val_col=None):
@@ -342,9 +347,10 @@ class TupleEmbedding(Estimator, torch.nn.Module):
 
         if train_attrs is not None:
             self.domain_df = self.domain_df[self.domain_df['attribute'].isin(train_attrs)]
+        self.domain_recs = self.domain_df.to_records()
 
         # Dataset
-        self._dataset = LookupDataset(env, dataset, self.domain_df, self, neg_sample, max_train_domain)
+        self._dataset = LookupDataset(env, dataset, self.domain_df, self, neg_sample, max_train_domain, memoize)
 
         self._train_attrs = self._dataset.train_attrs
         self._train_idx_to_val = self._dataset._train_idx_to_val
@@ -517,6 +523,11 @@ class TupleEmbedding(Estimator, torch.nn.Module):
 
                 self._optimizer.step()
                 batch_cnt += 1
+
+                if batch_cnt % 5 == 0:
+                    self.dump_model('%s_batch_%d_epoch_%d' % (self.ds.knn_prefix , batch_cnt, epoch_idx))
+                    self.dump_predictions('%s_batch_%d_epoch_%d' % (self.ds.knn_prefix, batch_cnt, epoch_idx))
+
             logging.debug('%s: average batch loss: %f',
                     type(self).__name__,
                     sum(batch_losses[-1 * batch_cnt:]) / batch_cnt)
@@ -527,17 +538,13 @@ class TupleEmbedding(Estimator, torch.nn.Module):
                 logging.debug("Precision: %.2f, Recall: %.2f, Repair Recall: %.2f",
                         val_res['precision'], val_res['recall'], val_res['repair_recall'])
                 logging.debug("(DK) Precision: %.2f, Recall: %.2f", val_res['dk_precision'], val_res['dk_recall'])
-                logging.debug("(prob >= %.2f & DK) Precision: %.2f, Recall: %.2f", val_prob,
+                logging.debug("(prob >= %.2f & DK) Precision: %.2f, Recall: %.2f", validate_prob,
                         val_res['hc_precision'], val_res['hc_recall'])
 
                 if validate_results_prefix is not None:
                     epoch_prefix = '%s_at_%d_epoch' % (validate_results_prefix, epoch_idx)
                     self.dump_model(epoch_prefix)
                     self.dump_predictions(epoch_prefix)
-
-            if epoch_idx % 1 == 0:
-                self.dump_model('%s_%d' % (self.ds.knn_prefix , epoch_idx))
-                self.dump_predictions('%s_%d' % (self.ds.knn_prefix, epoch_idx))
 
         return batch_losses
 
@@ -559,18 +566,47 @@ class TupleEmbedding(Estimator, torch.nn.Module):
         preds = self.predict_pp_batch()
         self._dataset.set_mode(inference_mode=False)
 
-        results = []
-        for ((vid, pred), row) in zip(preds, self.domain_df.to_records()):
-            assert vid == row['_vid_']
-            for val, proba in pred:
-                results.append({'_tid_': row['_tid_'],
-                    '_vid_': vid,
-                    'attribute': row['attribute'],
-                    'inf_val': val,
-                    'proba': proba})
+        logging.debug('constructing and dumping predictions...')
+        with open(fpath + '.csv', 'w') as csv_f:
+            writer = csv.writer(csv_f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+            # Write header.
+            writer.writerow(['_tid_', '_vid_', 'attribute', 'inf_val', 'proba'])
 
-        results = pd.DataFrame(results)
-        results.to_pickle('{}.pkl'.format(fpath))
+            written_rows = 0
+            for ((vid, pred), row) in zip(preds, self.domain_recs):
+                written_rows += 1
+                assert vid == row['_vid_']
+                max_val, max_proba = max(pred, key=lambda t: t[1])
+                writer.writerow([
+                    row['_tid_'],
+                    vid,
+                    row['attribute'],
+                    max_val,
+                    max_proba
+                ])
+                import pdb; pdb.set_trace()
+                if written_rows % 1000 == 0:
+                    csv_f.flush()
+
+        # results = []
+        # for ((vid, pred), row) in zip(preds, self.domain_df.to_records()):
+        #     assert vid == row['_vid_']
+        #     max_val, max_proba = max(pred, key=lambda t: t[1])
+        #     results.append({'_tid_': row['_tid_'],
+        #         '_vid_': vid,
+        #         'attribute': row['attribute'],
+        #         'inf_val': max_val,
+        #         'proba': max_proba})
+
+        #     # for val, proba in pred:
+        #     #     results.append({'_tid_': row['_tid_'],
+        #     #         '_vid_': vid,
+        #     #         'attribute': row['attribute'],
+        #     #         'inf_val': val,
+        #     #         'proba': proba})
+        #results = pd.DataFrame(results)
+        #logging.debug('dumping prediction df...')
+        #results.to_pickle('{}.pkl'.format(fpath))
 
     def validate(self, prob):
         # repairs on clean + DK cells
@@ -654,12 +690,19 @@ class TupleEmbedding(Estimator, torch.nn.Module):
         if df is None:
             df = self.domain_df
 
+        logging.debug('batch predicting...')
+
+        logging.debug('getting indices...')
         ds_tuples = [self._dataset[vid][1:] for vid in df['_vid_'].values]
         init_idxs, domain_idxs, attr_idx, domain_mask, target = [
                 torch.cat([vec.unsqueeze(0) for vec in ith_vecs])
                 for ith_vecs in list(zip(*ds_tuples))]
+        logging.debug('done getting indices.')
+
+        logging.debug('starting batch prediction...')
 
         pred_Y = self.forward(init_idxs, domain_idxs, attr_idx, domain_mask, target)
+        logging.debug('done batch prediction')
 
         # for logits, vid in zip(pred_Y, df['_vid_'].values):
         #     yield vid, zip(self._dataset.domain_values(vid), map(float, Softmax(dim=0)(logits)))

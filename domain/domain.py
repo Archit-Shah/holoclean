@@ -45,8 +45,9 @@ class DomainEngine:
         'cell_domain', 'pos_values').
         """
         tic = time.time()
-        self.compute_correlations()
-        self.setup_attributes()
+        # self.compute_correlations()
+        # self.setup_attributes()
+        self.setup_complete = True
         domain = self.generate_domain()
         self.store_domains(domain)
         status = "DONE with domain preparation."
@@ -337,6 +338,7 @@ class DomainEngine:
         er = TupleEmbedding(self.env, self.ds, domain_df,
                 train_attrs=TRAIN_ATTRS,
                 max_train_domain=KNN,
+                memoize=False,
                 # validate_fpath=self.ds.clean_fpath,
                 # validate_tid_col='tid',
                 # validate_attr_col='attribute',
@@ -347,7 +349,7 @@ class DomainEngine:
         # PREFIX = 'experiments/%s/%s_tuple_embed_%d_epochs_%d_knn_%.2f_attrW_%s' % (self.ds.raw_data.name,
         #    self.ds.raw_data.name, EPOCHS, KNN, ATTRW, "ALL")# ','.join(TRAIN_ATTRS))
         # assert os.path.exists(os.path.dirname(PREFIX))
-        er.train(EPOCHS, 32, LAMBDA,)
+        er.train(EPOCHS, 128, LAMBDA,)
                  # validate_epoch=1 ,
                  #validate_results_prefix=PREFIX,
                 # validate_prob=0.8,
