@@ -267,7 +267,6 @@ class Session:
         self.repair_engine = RepairEngine(env, self.ds)
         self.eval_engine = EvalEngine(env, self.ds)
 
-
     def load_data(self, name, fpath, na_values=None, entity_col=None, src_col=None):
         """
         load_data takes the filepath to a CSV file to load as the initial dataset.
@@ -309,10 +308,13 @@ class Session:
         logging.info(status)
         logging.debug('Time to detect errors: %.2f secs', detect_time)
 
-    def setup_domain(self):
-        status, domain_time = self.domain_engine.setup()
+    def generate_domain(self, store_to_db=True):
+        status, domain_time = self.domain_engine.setup(store_to_db=store_to_db)
         logging.info(status)
-        logging.debug('Time to setup the domain: %.2f secs', domain_time)
+        logging.debug('Time to generate the domain: %.2f secs', domain_time)
+
+    def weak_label(self):
+        self.domain_engine.weak_label()
 
     def repair_errors(self, featurizers):
         status, feat_time = self.repair_engine.setup_featurized_ds(featurizers)

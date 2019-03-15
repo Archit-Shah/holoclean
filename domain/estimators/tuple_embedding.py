@@ -1,12 +1,8 @@
 import logging
-import math
 import pickle
 import csv
 
-from gensim.models import FastText
 import numpy as np
-import pandas as pd
-import time
 import torch
 from torch.optim import Adam
 from torch.utils.data import Dataset, DataLoader, Sampler
@@ -59,10 +55,15 @@ class LookupDataset(Dataset):
         :param neg_sample: (bool) add negative examples for clean cells during training
         """
         # reference to model to access embeddings
+        """
+        FOR FULL DOT PROD
+        """
         self._embed_model = embed_model
         self._max_domain = max_train_domain
         self.inference_mode = False
-        self.memoize = memoize
+        """
+        END FULL DOT PROD
+        """
 
 
 
@@ -70,6 +71,7 @@ class LookupDataset(Dataset):
 
         self.env = env
         self.ds = dataset
+        self.memoize = memoize
 
         self._neg_sample = neg_sample
         """
@@ -142,9 +144,26 @@ class LookupDataset(Dataset):
         self._raw_data_dict = self._raw_data.set_index('_tid_').to_dict('index')
 
         self._vid_to_idx = {vid: idx for idx, vid in enumerate(domain_df['_vid_'].values)}
-        # self._train_records = domain_df[['_tid_', 'attribute', 'init_value', 'init_index', 'domain', 'domain_size', 'is_clean']].to_records()
-        self._train_records = domain_df[['_tid_', 'attribute', 'init_value', 'is_clean']].to_records()
-        # self._max_domain = int(domain_df['domain_size'].max())
+
+
+        """
+        FOR FULL DOT PROD
+        """
+        # self._train_records = domain_df[['_tid_', 'attribute', 'init_value', 'is_clean']].to_records()
+        """
+        FOR FULL DOT PROD
+        """
+
+
+        """
+        FOR DOMAIN DF 
+        """
+        self._train_records = domain_df[['_tid_', 'attribute', 'init_value',
+                                         'init_index', 'domain', 'domain_size', 'is_clean']].to_records()
+        self._max_domain = int(domain_df['domain_size'].max())
+        """
+        FOR DOMAIN DF 
+        """
 
         # memoized stuff
         if memoize:
@@ -172,13 +191,20 @@ class LookupDataset(Dataset):
         if not self.memoize or idx not in self._domain_idxs:
             cur = self._train_records[idx]
 
+            """
+            FOR DOMAIN DF
+            """
             # Domain values and their indexes (softmax indexes)
-            # domain_idxs = torch.LongTensor([self._train_val_idxs[cur['attribute']][val]
-            #         for val in cur['domain'].split('|||')])
-
             domain_idxs = torch.zeros(self._max_domain).type(torch.LongTensor)
-            if cur['init_value'] != '_nan_':
-                domain_idxs[0] = self._train_val_idxs[cur['attribute']][cur['init_value']]
+            domain_idxs[:cur['domain_size']] = torch.LongTensor([self._train_val_idxs[cur['attribute']][val]
+                    for val in cur['domain'].split('|||')])
+
+            """
+            FOR FULL DOT PROD
+            """
+            # domain_idxs = torch.zeros(self._max_domain).type(torch.LongTensor)
+            # if cur['init_value'] != '_nan_':
+            #     domain_idxs[0] = self._train_val_idxs[cur['attribute']][cur['init_value']]
 
             if not self.memoize:
                 return domain_idxs
@@ -218,6 +244,50 @@ class LookupDataset(Dataset):
 
         :param:`vid` is the desired VID or VIDs.
         """
+        # if hasattr(vid, '__len__'):
+        #     idxs = np.array([self._vid_to_idx[one_vid] for one_vid in vid])
+        #     cur_records = [self._train_records[idx] for idx in idxs]
+
+        #     # (batch_size, init_attrs - 1)
+        #     init_idxs = torch.stack([self._get_init_idxs(idx) for idx in idxs])
+        #     # (batch_size, max domain)
+        #     domain_idxs = torch.stack([self._get_domain_idxs(idx) for idx in idxs])
+        #     # (batch_size, 1)
+        #     # attr_idxs  = torch.LongTensor([self._train_attr_idxs[cur['attribute']]
+        #                                    # for cur in cur_records]).unsqueeze(-1)
+
+        #     # (batch_size, embed_size)
+        #     context_vecs = self._embed_model._get_combined_init_vec(
+        #         init_idxs,
+        #         torch.zeros(len(idxs), 1).type(torch.LongTensor)
+        #         # attr_idxs
+        #     ).squeeze(-1)
+
+        #     # TODO: This only really works on one attribute at a time since
+        #     # out_W contains embeddings for multiple attributes
+        #     # We could separate out_W by attribute
+        #     # (batch_size, # of train values)
+        #     sorted_idxs = (context_vecs.matmul(self._embed_model.out_W.transpose(0, 1)) + self._embed_model.out_B.view(1, -1)).argsort(1, descending=True)
+
+        #     # (batch_size, # of train values - 1)
+        #     sorted_idxs = sorted_idxs[sorted_idxs.ne(domain_idxs[:, 0:1])].view(len(idxs), -1)
+
+        #     neg_samples = sorted_idxs[:, :self._max_domain - 1]
+        #     domain_idxs[:, 1:] = neg_samples
+
+        #     domain_mask = torch.zeros_like(domain_idxs).type(torch.FloatTensor)
+        #     domain_mask[(domain_idxs == 0)] = -1* 1e-9
+
+        #     # target = torch.zeros(len(vid), 1).type(torch.LongTensor)
+
+        #     return torch.LongTensor(vid), \
+        #         init_idxs, \
+        #         domain_idxs, \
+        #         None, \
+        #         domain_mask, \
+        #         None
+
+
         idx = self._vid_to_idx[vid]
         cur = self._train_records[idx]
 
@@ -225,43 +295,69 @@ class LookupDataset(Dataset):
         domain_idxs = self._get_domain_idxs(idx)
         attr_idx  = torch.LongTensor([self._train_attr_idxs[cur['attribute']]])
 
-        # dom_size = cur['domain_size']
+
+        """
+        FOR DOMAIN DF
+        """
+        dom_size = cur['domain_size']
         # Add negative samples to a most likely correct (clean) cell
-        # if self._neg_sample and cur['is_clean']:
-        #     # It is faster not to memoize these.
-        #     neg_idxs = self._get_neg_idxs(idx)
-        #     neg_sample = torch.LongTensor(np.random.choice(neg_idxs,
-        #             size=min(len(neg_idxs), self._max_domain - dom_size),
-        #             replace=False))
-        #     domain_idxs[dom_size:dom_size+len(neg_sample)] = neg_sample
-        #     dom_size += len(neg_sample)
+        if self._neg_sample and dom_size < self._max_domain and cur['is_clean']:
+            # It is faster not to memoize these.
+            neg_idxs = self._get_neg_idxs(idx)
+            neg_sample = torch.LongTensor(np.random.choice(neg_idxs,
+                    size=min(len(neg_idxs), self._max_domain - dom_size),
+                    replace=False))
+
+            domain_idxs[dom_size:dom_size+len(neg_sample)] = neg_sample
+            dom_size += len(neg_sample)
+
+        # Position of init in domain values (target)
+        target = cur['init_index']
+        """
+        END DOMAIN DF
+        """
 
 
 
 
+        """
+        FOR FULL DOT PROD`
+        """
+        # dom_size = (domain_idxs != 0).sum()
 
-        dom_size = (domain_idxs != 0).sum()
-
-        # 1-D (embed_size) vector
-        context_vec = self._embed_model._get_combined_init_vec(
-                init_idxs.unsqueeze(0),
-                attr_idx.unsqueeze(0),
-            ).view(-1)
+        # # 1-D (embed_size) vector
+        # context_vec = self._embed_model._get_combined_init_vec(
+        #         init_idxs.unsqueeze(0),
+        #         attr_idx.unsqueeze(0),
+        #     ).view(-1)
 
 
-        # Only check neighbours of our current attribute
-        slice_idxs = self._train_val_idxs_by_attr[cur['attribute']]
-        # Omit our init value embedding
-        if dom_size > 0:
-            slice_idxs = slice_idxs[slice_idxs != domain_idxs[0]]
+        # # Only check neighbours of our current attribute
+        # slice_idxs = self._train_val_idxs_by_attr[cur['attribute']]
+        # # Omit our init value embedding
+        # if dom_size > 0:
+        #     slice_idxs = slice_idxs[slice_idxs != domain_idxs[0]]
 
-        # Get top KNN neighbours
-        sorted_idxs = (self._embed_model.out_W[slice_idxs].matmul(context_vec) +
-                self._embed_model.out_B[slice_idxs].view(-1)).argsort(descending=True)
+        # # Get top KNN neighbours
+        # sorted_idxs = (self._embed_model.out_W[slice_idxs].matmul(context_vec) +
+        #         self._embed_model.out_B[slice_idxs].view(-1)).argsort(descending=True)
 
-        neg_samples = slice_idxs[sorted_idxs[:self._max_domain - dom_size]]
-        domain_idxs[dom_size:dom_size+len(neg_samples)] = neg_samples
-        dom_size += len(neg_samples)
+        # neg_samples = slice_idxs[sorted_idxs[:self._max_domain - dom_size]]
+        # domain_idxs[dom_size:dom_size+len(neg_samples)] = neg_samples
+        # dom_size += len(neg_samples)
+
+        # # We assign the first index in domain_idxs as our target init index
+        # target = 0
+
+        # # Do not train on NULL init values/cells
+        # if cur['init_value'] == '_nan_':
+        #     target = -1
+
+        # assert (cur['init_value'] == '_nan_' and target == -1) or \
+        #        (target == 0 and cur['init_value'] == self._train_idx_to_val[int(domain_idxs[0])])
+        """
+        END FULL DOT PROD
+        """
 
 
 
@@ -271,24 +367,6 @@ class LookupDataset(Dataset):
         # Mask out non-relevant values from padding (see below)
         domain_mask = torch.zeros(self._max_domain)
         domain_mask[dom_size:] = -1 * 1e9
-
-        # Position of init in domain values (target)
-        # target = cur['init_index']
-
-
-
-
-        # We assign the first index in domain_idxs as our target init index
-        target = 0
-
-        # Do not train on NULL init values/cells
-        if cur['init_value'] == '_nan_':
-            target = -1
-
-        assert (cur['init_value'] == '_nan_' and target == -1) or \
-                (target == 0 and cur['init_value'] == self._train_idx_to_val[int(domain_idxs[0])])
-
-
 
 
         return vid, \
@@ -303,8 +381,12 @@ class LookupDataset(Dataset):
         return self._train_records[idx]['domain'].split('|||')
 
 class VidSampler(Sampler):
-    def __init__(self, domain_df, shuffle=True):
-        self._vids = domain_df.loc[domain_df['is_clean'], '_vid_'].values
+    def __init__(self, domain_df, shuffle=True, train_only_clean=True):
+        # Train on only clean cells
+        if train_only_clean:
+            self._vids = domain_df.loc[domain_df['is_clean'], '_vid_'].values
+        else:
+            self._vids = domain_df['_vid_'].values
 
         if shuffle:
             self._vids = np.random.permutation(self._vids)
@@ -314,6 +396,7 @@ class VidSampler(Sampler):
 
     def __len__(self):
         return len(self._vids)
+
 
 class TupleEmbedding(Estimator, torch.nn.Module):
     WEIGHT_DECAY = 0
@@ -459,8 +542,9 @@ class TupleEmbedding(Estimator, torch.nn.Module):
         return logits
 
 
-    def train(self, num_epochs, batch_size, weight_entropy_lambda=0.,
+    def train(self,
             shuffle=True,
+            train_only_clean=True,
             validate_results_prefix=None, validate_epoch=10, validate_prob=0.9):
         """
         :param num_epochs: (int) number of epochs to train for
@@ -482,16 +566,23 @@ class TupleEmbedding(Estimator, torch.nn.Module):
         """
         batch_losses = []
 
-        logging.debug("%s: training on %d cells in columns: %s", type(self).__name__,
-                self.domain_df.shape[0],
-                self._train_attrs)
+        num_epochs = self.env['embed_estimator_num_epochs']
+        weight_entropy_lambda = self.env['embed_estimator_lambda']
+        batch_size = self.env['embed_estimator_batch_size']
+        batch_dump = self.env['embed_estimator_batch_dump']
+
+        logging.debug("%s: training (lambda = %f) on %d cells in columns: %s",
+                      type(self).__name__,
+                      weight_entropy_lambda,
+                      self.domain_df.shape[0],
+                      self._train_attrs)
 
         # Main training loop.
         for epoch_idx in range(1, num_epochs+1):
             logging.debug("%s: epoch %d", type(self).__name__, epoch_idx)
             batch_cnt = 0
             for _, init_idxs, domain_idxs, attr_idx, domain_mask, target in tqdm(DataLoader(self._dataset,
-                batch_size=batch_size, sampler=VidSampler(self.domain_df, shuffle=shuffle))):
+                batch_size=batch_size, sampler=VidSampler(self.domain_df, shuffle=shuffle, train_only_clean=train_only_clean))):
                 target = target.view(-1)
 
                 batch_pred = self.forward(init_idxs, domain_idxs, attr_idx, domain_mask, target)
@@ -524,9 +615,10 @@ class TupleEmbedding(Estimator, torch.nn.Module):
                 self._optimizer.step()
                 batch_cnt += 1
 
-                if batch_cnt % 5 == 0:
+                if batch_cnt % batch_dump == 0:
                     self.dump_model('%s_batch_%d_epoch_%d' % (self.ds.knn_prefix , batch_cnt, epoch_idx))
-                    self.dump_predictions('%s_batch_%d_epoch_%d' % (self.ds.knn_prefix, batch_cnt, epoch_idx))
+                    # self.dump_predictions('%s_batch_%d_epoch_%d' % (self.ds.knn_prefix, batch_cnt, epoch_idx))
+            self.dump_model('%s_epoch_%d' % (self.ds.knn_prefix, epoch_idx))
 
             logging.debug('%s: average batch loss: %f',
                     type(self).__name__,
@@ -584,7 +676,6 @@ class TupleEmbedding(Estimator, torch.nn.Module):
                     max_val,
                     max_proba
                 ])
-                import pdb; pdb.set_trace()
                 if written_rows % 1000 == 0:
                     csv_f.flush()
 
@@ -693,10 +784,14 @@ class TupleEmbedding(Estimator, torch.nn.Module):
         logging.debug('batch predicting...')
 
         logging.debug('getting indices...')
-        ds_tuples = [self._dataset[vid][1:] for vid in df['_vid_'].values]
-        init_idxs, domain_idxs, attr_idx, domain_mask, target = [
-                torch.cat([vec.unsqueeze(0) for vec in ith_vecs])
-                for ith_vecs in list(zip(*ds_tuples))]
+
+        ds_tuples = []
+        for vids in tqdm(np.array_split(df['_vid_'].values, 1000)):
+            ds_tuples.append(self._dataset[vids][1:])
+
+        init_idxs, domain_idxs, attr_idx, domain_mask, target = [torch.cat(tensors, dim=0) if tensors[0] is not None else None for tensors in list(zip(*ds_tuples))]
+        attr_idx = torch.zeros(init_idxs.shape[0], 1).type(torch.LongTensor)
+        target = torch.zeros(init_idxs.shape[0], 1).type(torch.LongTensor)
         logging.debug('done getting indices.')
 
         logging.debug('starting batch prediction...')

@@ -58,7 +58,7 @@ class Dataset:
         self.single_attr_stats = {}
         # Domain stats for attribute pairs
         self.pair_attr_stats = {}
-        self.knn_prefix = 'knn_1lambda'
+        self.knn_prefix = 'knn_'
 
     # TODO(richardwu): load more than just CSV files
     def load_data(self, name, fpath, na_values=None, entity_col=None, src_col=None):

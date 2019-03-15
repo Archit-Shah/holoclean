@@ -42,7 +42,7 @@ def test_hospital_with_init():
         hc.detect_errors(detectors)
 
         # 4. Repair errors utilizing the defined features.
-        hc.setup_domain()
+        hc.generate_domain()
         featurizers = [
             InitAttrFeaturizer(),
             OccurAttrFeaturizer(),
@@ -106,7 +106,7 @@ def test_hospital_without_init():
         hc.detect_errors(detectors)
 
         # 4. Repair errors utilizing the defined features.
-        hc.setup_domain()
+        hc.generate_domain()
         featurizers = [
             OccurAttrFeaturizer(),
             FreqFeaturizer(),
