@@ -448,10 +448,13 @@ class TupleEmbedding(Estimator, torch.nn.Module):
         """
 
         # Add DK information to domain dataframe
-        df_dk = self.ds.aux_table[AuxTables.dk_cells].df
-        self.domain_df = self.domain_df.merge(df_dk,
-                on=['_tid_', 'attribute'], how='left', suffixes=('', '_dk'))
-        self.domain_df['is_clean'] = self.domain_df['_cid__dk'].isnull()
+        if self.ds.aux_table[AuxTables.dk_cells] is not None:
+            df_dk = self.ds.aux_table[AuxTables.dk_cells].df
+            self.domain_df = self.domain_df.merge(df_dk,
+                    on=['_tid_', 'attribute'], how='left', suffixes=('', '_dk'))
+            self.domain_df['is_clean'] = self.domain_df['_cid__dk'].isnull()
+        else:
+            self.domain_df['is_clean'] = True
 
         if train_attrs is not None:
             self.domain_df = self.domain_df[self.domain_df['attribute'].isin(train_attrs)]
@@ -753,11 +756,16 @@ class TupleEmbedding(Estimator, torch.nn.Module):
                     if not row['is_clean']:
                         incor_repair_dk += 1
 
+        if self._validate_total_errs == 0:
+            logging.warning('%s: total errors in validation set is 0', type(self).__name__)
+        if self._validate_detected_errs == 0:
+            logging.warning('%s: total detected errors in validation set is 0', type(self).__name__)
+
         return {'precision': cor_repair / max(cor_repair + incor_repair, 1),
-            'recall': cor_repair / self._validate_total_errs,
+            'recall': cor_repair / max(self._validate_total_errs, 1),
             'dk_precision': cor_repair_dk / max(cor_repair_dk + incor_repair_dk, 1),
-            'dk_recall': cor_repair_dk / self._validate_total_errs,
-            'repair_recall': cor_repair_dk / self._validate_detected_errs,
+            'dk_recall': cor_repair_dk / max(self._validate_total_errs, 1),
+            'repair_recall': cor_repair_dk / max(self._validate_detected_errs, 1),
             }
 
 

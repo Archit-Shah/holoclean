@@ -34,7 +34,8 @@ class DetectEngine:
 
         # Get unique errors only that might have been detected from multiple detectors.
         errors_df = pd.concat(errors, ignore_index=True).drop_duplicates().reset_index(drop=True)
-        errors_df['_cid_'] = errors_df.apply(lambda x: self.ds.get_cell_id(x['_tid_'], x['attribute']), axis=1)
+        if errors_df.shape[0]:
+            errors_df['_cid_'] = errors_df.apply(lambda x: self.ds.get_cell_id(x['_tid_'], x['attribute']), axis=1)
         logging.info("detected %d potentially erroneous cells", errors_df.shape[0])
 
         # Store errors to db.
