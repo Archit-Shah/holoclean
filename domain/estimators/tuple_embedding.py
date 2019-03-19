@@ -13,6 +13,7 @@ from tqdm import tqdm
 from dataset import AuxTables
 from evaluate import EvalEngine
 from ..estimator import Estimator
+from utils import NULL_REPR
 
 
 class LookupDataset(Dataset):
@@ -156,13 +157,13 @@ class LookupDataset(Dataset):
 
 
         """
-        FOR DOMAIN DF 
+        FOR DOMAIN DF
         """
         self._train_records = domain_df[['_tid_', 'attribute', 'init_value',
                                          'init_index', 'domain', 'domain_size', 'is_clean']].to_records()
         self._max_domain = int(domain_df['domain_size'].max())
         """
-        FOR DOMAIN DF 
+        FOR DOMAIN DF
         """
 
         # memoized stuff
@@ -244,6 +245,10 @@ class LookupDataset(Dataset):
 
         :param:`vid` is the desired VID or VIDs.
         """
+
+        """
+        FOR BATCH LOOKUP
+        """
         # if hasattr(vid, '__len__'):
         #     idxs = np.array([self._vid_to_idx[one_vid] for one_vid in vid])
         #     cur_records = [self._train_records[idx] for idx in idxs]
@@ -286,6 +291,9 @@ class LookupDataset(Dataset):
         #         None, \
         #         domain_mask, \
         #         None
+        """
+        FOR BATCH LOOKUP
+        """
 
 
         idx = self._vid_to_idx[vid]
@@ -294,7 +302,6 @@ class LookupDataset(Dataset):
         init_idxs = self._get_init_idxs(idx)
         domain_idxs = self._get_domain_idxs(idx)
         attr_idx  = torch.LongTensor([self._train_attr_idxs[cur['attribute']]])
-
 
         """
         FOR DOMAIN DF
@@ -382,11 +389,16 @@ class LookupDataset(Dataset):
 
 class VidSampler(Sampler):
     def __init__(self, domain_df, shuffle=True, train_only_clean=True):
+        # No NULLs and non-zero domain
+        domain_df = domain_df[domain_df['init_value'] != NULL_REPR]
+
         # Train on only clean cells
         if train_only_clean:
-            self._vids = domain_df.loc[domain_df['is_clean'], '_vid_'].values
+            self._vids = domain_df.loc[domain_df['is_clean'], '_vid_']
         else:
             self._vids = domain_df['_vid_'].values
+
+        self._vids = self._vids
 
         if shuffle:
             self._vids = np.random.permutation(self._vids)
@@ -421,6 +433,19 @@ class TupleEmbedding(Estimator, torch.nn.Module):
         """
         torch.nn.Module.__init__(self)
         Estimator.__init__(self, env, dataset, domain_df)
+
+        """
+        FOR DOMAIN DF
+        """
+        filter_empty_domain = self.domain_df['domain_size'] == 0
+        if filter_empty_domain.sum():
+            logging.warning('%s: removing %d cells with empty domains',
+                type(self).__name__,
+                filter_empty_domain.sum())
+            self.domain_df = self.domain_df[~filter_empty_domain]
+        """
+        FOR DOMAIN DF
+        """
 
         # Add DK information to domain dataframe
         df_dk = self.ds.aux_table[AuxTables.dk_cells].df
@@ -542,10 +567,7 @@ class TupleEmbedding(Estimator, torch.nn.Module):
         return logits
 
 
-    def train(self,
-            shuffle=True,
-            train_only_clean=True,
-            validate_results_prefix=None, validate_epoch=10, validate_prob=0.9):
+    def train(self, shuffle=True, train_only_clean=True):
         """
         :param num_epochs: (int) number of epochs to train for
         :param batch_size: (int) size of batches
@@ -555,43 +577,47 @@ class TupleEmbedding(Estimator, torch.nn.Module):
             A higher penalization strength means the model will depend
             on more attributes instead of putting all weight on a few
             attributes. Recommended values between 0 to 0.5.
-
-        Validation parameters (only applicable if validation set was given
-        during initialization):
-        :param validate_results_prefix: (string) If not None, dumps
-            validation results with this filepath prefix.
-        :param validate_epoch: (int) run validation every validate_epoch-th epoch.
-        :param validate_prob: (float) threshold for precision/recall statistics on
-            high confidence predictions.
         """
-        batch_losses = []
 
         num_epochs = self.env['embed_estimator_num_epochs']
         weight_entropy_lambda = self.env['embed_estimator_lambda']
         batch_size = self.env['embed_estimator_batch_size']
-        batch_dump = self.env['embed_estimator_batch_dump']
 
-        logging.debug("%s: training (lambda = %f) on %d cells in columns: %s",
+        dump_batch = self.env['embed_estimator_dump_batch']
+        dump_prefix = self.env['embed_estimator_dump_prefix']
+
+        validate_epoch = self.env['embed_estimator_validate_epoch']
+        validate_prefix = self.env['embed_estimator_validate_prefix']
+
+
+        # Returns VIDs to train on.
+        sampler = VidSampler(self.domain_df, shuffle=shuffle, train_only_clean=train_only_clean)
+
+        logging.debug("%s: training (lambda = %f) on %d cells (%d cells in total) in %d columns: %s",
                       type(self).__name__,
                       weight_entropy_lambda,
+                      len(sampler),
                       self.domain_df.shape[0],
+                      len(self._train_attrs),
                       self._train_attrs)
 
+        batch_losses = []
         # Main training loop.
         for epoch_idx in range(1, num_epochs+1):
             logging.debug("%s: epoch %d", type(self).__name__, epoch_idx)
             batch_cnt = 0
             for _, init_idxs, domain_idxs, attr_idx, domain_mask, target in tqdm(DataLoader(self._dataset,
-                batch_size=batch_size, sampler=VidSampler(self.domain_df, shuffle=shuffle, train_only_clean=train_only_clean))):
+                batch_size=batch_size, sampler=sampler)):
                 target = target.view(-1)
 
                 batch_pred = self.forward(init_idxs, domain_idxs, attr_idx, domain_mask, target)
 
                 # Do not train on null inits (target == -1)
-                batch_pred = batch_pred[target >= 0]
-                target = target[target >= 0]
-                if len(target) == 0:
-                    continue
+                # We already filter these in VidSampler
+                # batch_pred = batch_pred[target >= 0]
+                # target = target[target >= 0]
+                # if len(target) == 0:
+                #     continue
 
                 batch_loss = self._loss(batch_pred, target)
 
@@ -599,6 +625,7 @@ class TupleEmbedding(Estimator, torch.nn.Module):
                 # we maximize entropy of the logits of attr_W to encourage
                 # non-sparsity of logits.
                 if weight_entropy_lambda != 0.:
+                    import pdb; pdb.set_trace()
                     attr_weights = Softmax(dim=1)(self.attr_W).view(-1)
                     neg_attr_W_entropy = attr_weights.dot(attr_weights.log()) / self.attr_W.shape[0]
                     batch_loss.add_(weight_entropy_lambda * neg_attr_W_entropy)
@@ -615,10 +642,9 @@ class TupleEmbedding(Estimator, torch.nn.Module):
                 self._optimizer.step()
                 batch_cnt += 1
 
-                if batch_cnt % batch_dump == 0:
-                    self.dump_model('%s_batch_%d_epoch_%d' % (self.ds.knn_prefix , batch_cnt, epoch_idx))
-                    # self.dump_predictions('%s_batch_%d_epoch_%d' % (self.ds.knn_prefix, batch_cnt, epoch_idx))
-            self.dump_model('%s_epoch_%d' % (self.ds.knn_prefix, epoch_idx))
+                if batch_cnt % dump_batch == 0:
+                    self.dump_model('%s_batch_%d_epoch_%d' % (dump_prefix, batch_cnt, epoch_idx))
+            self.dump_model('%s_epoch_%d' % (dump_prefix, epoch_idx))
 
             logging.debug('%s: average batch loss: %f',
                     type(self).__name__,
@@ -626,15 +652,13 @@ class TupleEmbedding(Estimator, torch.nn.Module):
 
             # Validation stuff
             if self._do_validation and epoch_idx % validate_epoch == 0:
-                val_res = self.validate(validate_prob)
+                val_res = self.validate()
                 logging.debug("Precision: %.2f, Recall: %.2f, Repair Recall: %.2f",
                         val_res['precision'], val_res['recall'], val_res['repair_recall'])
                 logging.debug("(DK) Precision: %.2f, Recall: %.2f", val_res['dk_precision'], val_res['dk_recall'])
-                logging.debug("(prob >= %.2f & DK) Precision: %.2f, Recall: %.2f", validate_prob,
-                        val_res['hc_precision'], val_res['hc_recall'])
 
-                if validate_results_prefix is not None:
-                    epoch_prefix = '%s_at_%d_epoch' % (validate_results_prefix, epoch_idx)
+                if validate_prefix is not None:
+                    epoch_prefix = '%s_at_%d_epoch' % (validate_prefix, epoch_idx)
                     self.dump_model(epoch_prefix)
                     self.dump_predictions(epoch_prefix)
 
@@ -699,7 +723,7 @@ class TupleEmbedding(Estimator, torch.nn.Module):
         #logging.debug('dumping prediction df...')
         #results.to_pickle('{}.pkl'.format(fpath))
 
-    def validate(self, prob):
+    def validate(self):
         # repairs on clean + DK cells
         cor_repair = 0
         incor_repair = 0
@@ -707,10 +731,6 @@ class TupleEmbedding(Estimator, torch.nn.Module):
         # repairs only on DK cells
         cor_repair_dk = 0
         incor_repair_dk = 0
-
-        # repairs only on DK cells AND >= prob
-        cor_repair_hc = 0
-        incor_repair_hc = 0
 
         logging.debug('Running validation set...')
 
@@ -727,23 +747,17 @@ class TupleEmbedding(Estimator, torch.nn.Module):
                     cor_repair += 1
                     if not row['is_clean']:
                         cor_repair_dk += 1
-                        if inf_prob >= prob:
-                            cor_repair_hc += 1
                 # Correct val != inf val
                 else:
                     incor_repair += 1
                     if not row['is_clean']:
                         incor_repair_dk += 1
-                        if inf_prob >= prob:
-                            incor_repair_hc += 1
 
         return {'precision': cor_repair / max(cor_repair + incor_repair, 1),
             'recall': cor_repair / self._validate_total_errs,
             'dk_precision': cor_repair_dk / max(cor_repair_dk + incor_repair_dk, 1),
             'dk_recall': cor_repair_dk / self._validate_total_errs,
             'repair_recall': cor_repair_dk / self._validate_detected_errs,
-            'hc_precision': cor_repair_hc / max(cor_repair_hc + incor_repair_hc, 1),
-            'hc_recall': cor_repair_hc / self._validate_total_errs,
             }
 
 
@@ -785,13 +799,32 @@ class TupleEmbedding(Estimator, torch.nn.Module):
 
         logging.debug('getting indices...')
 
-        ds_tuples = []
-        for vids in tqdm(np.array_split(df['_vid_'].values, 1000)):
-            ds_tuples.append(self._dataset[vids][1:])
+        """
+        FOR FULL DOT PROD AND BATCH LOOKUP
+        """
+        # ds_tuples = []
+        # for vids in tqdm(np.array_split(df['_vid_'].values, 1000)):
+        #     ds_tuples.append(self._dataset[vids][1:])
 
-        init_idxs, domain_idxs, attr_idx, domain_mask, target = [torch.cat(tensors, dim=0) if tensors[0] is not None else None for tensors in list(zip(*ds_tuples))]
-        attr_idx = torch.zeros(init_idxs.shape[0], 1).type(torch.LongTensor)
-        target = torch.zeros(init_idxs.shape[0], 1).type(torch.LongTensor)
+        # init_idxs, domain_idxs, attr_idx, domain_mask, target = [torch.cat(tensors, dim=0) if tensors[0] is not None else None for tensors in list(zip(*ds_tuples))]
+        # attr_idx = torch.zeros(init_idxs.shape[0], 1).type(torch.LongTensor)
+        # target = torch.zeros(init_idxs.shape[0], 1).type(torch.LongTensor)
+        """
+        FOR FULL DOT PROD AND BATCH LOOKUP
+        """
+
+        """
+        FOR DOMAIN DF
+        """
+        ds_tuples = [self._dataset[vid][1:] for vid in df['_vid_'].values]
+        init_idxs, domain_idxs, attr_idx, domain_mask, target = [
+                torch.cat([vec.unsqueeze(0) for vec in ith_vecs])
+                for ith_vecs in list(zip(*ds_tuples))]
+        """
+        FOR DOMAIN DF
+        """
+
+
         logging.debug('done getting indices.')
 
         logging.debug('starting batch prediction...')

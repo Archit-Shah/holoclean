@@ -46,6 +46,10 @@ class DomainEngine:
         'cell_domain', 'pos_values').
         """
         tic = time.time()
+        # Attributes/columns ot train on for embedding estimator.
+        self.train_attrs = self.env['embed_estimator_train_attrs']
+        if self.train_attrs is None:
+            self.train_attrs = sorted(self.ds.get_attributes())
         self.compute_correlations()
         self.setup_attributes()
         self.generate_domain()
@@ -63,7 +67,7 @@ class DomainEngine:
         """
         logging.debug("Computing correlations...")
         self.correlations = self.compute_norm_cond_entropy_corr(self.ds.get_raw_data(),
-                                                                self.ds.train_attrs,
+                                                                self.ds.get_attributes(),
                                                                 self.ds.get_attributes())
 
     @staticmethod
@@ -250,7 +254,7 @@ class DomainEngine:
         df_prefix = self.env['domain_df_prefix']
         for row in tqdm(list(records)):
             tid = row['_tid_']
-            for attr in self.ds.train_attrs:
+            for attr in self.train_attrs:
                 init_value, init_value_idx, dom = self.get_domain_cell(attr, row)
                 cid = self.ds.get_cell_id(tid, attr)
                 cells.append({"_tid_": tid,
@@ -523,9 +527,6 @@ class DomainEngine:
         return domain_df
 
     def _weak_label_embedding(self):
-
-        TRAIN_ATTRS = self.ds.train_attrs
-
         """
         FOR FULL DOT PROD
         """
@@ -534,7 +535,7 @@ class DomainEngine:
         # vid = 0
         # for row in tqdm(list(records)):
         #     tid = row['_tid_']
-        #     for attr in TRAIN_ATTRS:
+        #     for attr in self.train_attrs:
         #         init_value = row[attr]
 
         #         cells.append({'_tid_': tid,
@@ -554,28 +555,28 @@ class DomainEngine:
         """
         FOR DOMAIN DF
         """
+        if self.domain_df is None:
+            raise Exception("must call hc.generate_domain() before invoking weak_label() in domain-mode")
+
         domain_df = self.domain_df
+        if '_vid_' not in domain_df.columns:
+            domain_df.reset_index()
         """
         END DOMAIN DF
         """
 
         er = TupleEmbedding(self.env, self.ds, domain_df,
-                train_attrs=TRAIN_ATTRS,
+                train_attrs=self.train_attrs,
+                embed_size=self.env['embed_estimator_embed_size'],
                 max_train_domain=self.env['embed_estimator_knn'],
-                memoize=False,
-                # validate_fpath=self.ds.clean_fpath,
-                # validate_tid_col='tid',
-                # validate_attr_col='attribute',
-                # validate_val_col='correct_val'
+                memoize=self.env['embed_estimator_memoize'],
+                validate_fpath=self.env['embed_estimator_validate_fpath'],
+                validate_tid_col='tid',
+                validate_attr_col='attribute',
+                validate_val_col='correct_val'
                             )
-        # PREFIX = 'experiments/%s/%s_tuple_embed_%d_epochs_%d_knn_%.2f_attrW_%s' % (self.ds.raw_data.name,
-        #    self.ds.raw_data.name, EPOCHS, KNN, ATTRW, "ALL")# ','.join(TRAIN_ATTRS))
-        # assert os.path.exists(os.path.dirname(PREFIX))
-        er.train()
-                 # validate_epoch=1 ,
-                 #validate_results_prefix=PREFIX,
-                # validate_prob=0.8,
-                # validate_epoch=1)
+
+        er.train(train_only_clean=self.env['embed_estimator_train_only_clean'])
         return domain_df
 
 
